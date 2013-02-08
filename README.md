@@ -39,7 +39,7 @@ identified by *Token Id*.
 issuing the delete command and the *Token Id*.
 
 # License
-Licensed under a GNU General Public License v3.0.
+Licensed under a [GNU General Public License v3.0](http://www.gnu.org/licenses/gpl.html).
 
 # Project's webpage
 The official project webpage: http://rdlab.lsi.upc.edu/ajo
