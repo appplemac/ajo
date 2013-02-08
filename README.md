@@ -15,7 +15,11 @@ Through a command line interface, AJO conceals technical issues such as establis
 
 # How does it work?
 AJO uses a simple three-command scheme to manage the data transport to/from the HPC system and the execution of every task. The configuration file contains all the information needed to fulfil the execution, as well as the data paths.
+
+
 *Warning: All the tasks performed by AJO are stored in the HPC users' home ($HOME/.executions) by default.*
+
+
 **Submit:** This process copies your data to the queue system, builds
 the execution script and submits the job to the queue system. It returns
 a secure *Token Id* that allows you to check and retrieve results.
