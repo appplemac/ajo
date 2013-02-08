@@ -1,0 +1,263 @@
+#!/usr/bin/env ruby
+# vim: ft=ruby
+=begin
+====================================================================
+
+Ajo
+Copyright (c) 2012-2013 RDlab, LSI, UPC BarcelonaTech.
+
+This file is part of Ajo.
+
+Ajo is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+Ajo is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with Ajo. If not, see <http://www.gnu.org/licenses/>.
+
+====================================================================
+=end
+
+begin
+  require 'optparse'
+  require 'logger'
+  require 'openssl'
+  require 'fileutils'
+  require 'tempfile'
+  require 'tmpdir'
+rescue LoadError
+  abort "Failed to load required libraries"
+end
+
+$VERSION = "1.0.6"
+
+# set up a log file in the current directory.
+$LOG = Logger.new 'ajo.log', 'daily'
+$LOG.level = Logger::ERROR
+
+options = {}
+optparse = OptionParser.new do |opts|
+  opts.banner = "Usage: #{$0} [-c FILE] (-s|-q ID|-r ID|-e ID) [options]"
+
+  options[:config] = nil
+  opts.on('-c FILE', '--config FILE', 'Sets FILE as a configuration file') do |file|
+    options[:config] = File.expand_path(file)
+  end
+
+  options[:submit] = nil
+  opts.on('-s', '--submit', 'Submits a job, specified in the config file, to the cluster') do
+    options[:submit] = true
+  end
+
+  options[:query] = nil
+  opts.on('-q ID', '--query ID', String, 'Gets the information about id, specified in the ID') do |id|
+    options[:query] = id
+  end
+
+  options[:retrieve] = nil
+  opts.on('-r ID', '--retrieve ID', String, 'Downloads the results of the execution of the job, specified in the ID') do |id|
+    options[:retrieve] = id
+  end
+
+  options[:retrieve_directory] = nil
+  opts.on('-d DIR', '--retrieve-directory DIR', String, 'Downloads the results of the execution to DIR') do |dir|
+    options[:retrieve_directory] = File.expand_path(dir)
+  end
+
+  options[:retrieve_all] = nil
+  opts.on('-a', '--all', 'Downloads all the output ignoring the configuration file') do
+    options[:retrieve_all] = true
+  end
+
+  options[:erase] = nil
+  opts.on('-e ID', '--erase ID', String, 'Erases the job directory from server') do |id|
+    options[:erase] = id
+  end
+
+  options[:api] = false
+  opts.on('--api', 'Prints concise output') do |b|
+    options[:api] = b
+  end
+
+  opts.on('-v', '--version', 'Print the program and library version') do
+    puts "ajo and libhpc, version " + $VERSION
+    puts "Copyright (C) 2012-2013 RDlab, LSI, UPC"
+    exit
+  end
+
+  opts.on('--log-all', 'Log everything') do
+    $LOG.level = Logger::INFO
+  end
+
+  options[:list] = nil
+  opts.on('-l', '--list', 'List all the identifiers available for query and retrieval') do
+    options[:list] = true
+  end
+
+  options[:cancel] = nil
+  opts.on('-x ID', '--cancel ID', String, 'Cancel a running job') do |id|
+    options[:cancel] = id
+  end
+
+  options[:library] = nil
+  opts.on('--library FILE', 'Specify libhpc location') do |file|
+    options[:library] = File.expand_path(file)
+  end
+end
+
+optparse.parse!
+$LOG.info "Starting. Got options #{options.inspect}"
+
+if (not options[:config].nil?) and (File.exists? options[:config])
+  begin
+    load options[:config]
+  rescue LoadError
+    abort "Failed to load the config file"
+  end
+  $LOG.info "Imported the config file #{options[:config]}"
+elsif File.exists? "#{File.expand_path(File.dirname(__FILE__))}/config.rb"
+  begin
+    load "#{File.expand_path(File.dirname(__FILE__))}/config.rb"
+  rescue LoadError
+    abort "Failed to load the config file"
+  end
+  $LOG.info "Found config.rb in current directory. Importing"
+else
+  $LOG.error "Config file not specified or does not exist. Exiting"
+  puts "INFO: Config file not specified or does not exist. Exiting"
+  abort
+end
+
+begin
+  if options[:library] == nil
+    require 'libhpc'
+  else
+    require options[:library]
+  end
+rescue LoadError
+  abort "Failed to load main library"
+end
+
+include Hpc
+if options[:api]
+  prefix = "INFO: "
+else
+  prefix = ""
+end
+
+if not options[:submit].nil?
+  result = Hpc::submit
+  if result == 1
+    $LOG.error "No commands supplied. Exiting"
+    puts "#{prefix}No commands supplied in the config file."
+    abort
+  end
+  $LOG.info  "Job submitted correctly. The encoded job identifier is #{result}"
+  if options[:api]
+    puts result
+  else
+    puts "Job submitted correctly. The job identifier is #{result}"
+  end
+  exit
+
+elsif not options[:query].nil?
+  job_info = Hpc::decode(options[:query])
+  $LOG.info "Job info is #{job_info.inspect}"
+  result = Hpc::query(job_info)
+  $LOG.info "Query result is #{result}"
+  case result
+  when 0
+    time = ssh("#{QACCT_CMD} -j #{job_info[:jobid]} | grep end_time").split[1..5].join(" ")
+    if options[:api]
+      puts time
+    else
+      puts "Your job has finished running on #{time}. You can now do '#{$0} --retrieve ID' to download the output files and folders."
+    end
+  when 1
+    puts "#{prefix}Your job is still running."
+  when 2
+    puts "#{prefix}Job doesn't exist."
+    abort
+  when 3
+    puts "#{prefix}The identifier has incorrect format."
+    abort
+  when 4..255
+    puts "#{prefix}SSH error occured."
+    abort
+  end
+  exit
+
+elsif not options[:retrieve].nil? or not options[:retrieve_all].nil?
+  $LOG.info "Starting the retrieval"
+  job_info = Hpc::decode(options[:retrieve])
+  query_result = query(job_info)
+  if query_result == 1
+    $LOG.error "Error retrieving the result: job is still running"
+    abort "Error retrieving the result: job is still running"
+  elsif query_result == 2
+    $LOG.error "Error retrieving the result: job folder has been erased or had never existed"
+    abort "Error retrieving the result: job folder has been erased or had never existed"
+  elsif query_result != 0
+    $LOG.error "Error retrieving the result"
+    abort "Error retrieving the result"
+  end
+  if options[:retrieve_directory].nil?
+    retrieve_directory = `mktemp -d`.chomp "\n"
+    $LOG.info "Retrieve directory was not specified, generated a random one: #{retrieve_directory}"
+  else
+    retrieve_directory = options[:retrieve_directory]
+    $LOG.info "Setting retrieve directory to #{retrieve_directory}"
+  end
+  if not options[:retrieve].nil?
+    Hpc::retrieve job_info, retrieve_directory, Hpc::RETRIEVE
+  else
+    Hpc::retrieve_all job_info, retrieve_directory
+  end
+  $LOG.info "Performed the retrieval with job info #{job_info.inspect}"
+  if options[:api]
+    puts retrieve_directory
+  else
+    puts "Downloaded the output to #{retrieve_directory}"
+  end
+  exit
+
+elsif not options[:erase].nil?
+  $LOG.info "Erasing"
+  job_info = Hpc::decode(options[:erase])
+  Hpc::erase(job_info)
+  $LOG.info "Done erasing"
+  if options[:api]
+    puts "DONE"
+  else
+    puts "Erased the job directory"
+  end
+  exit
+
+elsif not options[:list].nil?
+  $LOG.info "Listing"
+  Hpc::list
+  exit
+
+elsif not options[:cancel].nil?
+  $LOG.info "Cancelling the job with id #{options[:cancel]}"
+  job_info = Hpc::decode(options[:cancel])
+  Hpc::cancel(job_info)
+  $LOG.info "Done cancelling"
+  if options[:api]
+    puts "DONE"
+  else
+    puts "Cancelled the specified job"
+  end
+  exit
+
+else
+  $LOG.error "No options provided. Exiting"
+  puts "#{prefix}No options provided."
+  abort
+end
