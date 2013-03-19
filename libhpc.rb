@@ -275,7 +275,7 @@ module Hpc
       return 2
     else
       # check if the folder with results exists
-      directory = ssh("if test -d #{AJO_DIR}/#{job_info[:temp_dir]}; then echo \'true\'; else echo \'false\'; fi")
+      directory = ssh("test -d #{AJO_DIR}/#{job_info[:temp_dir]} && echo true || echo false")
       if directory == "false"
         $LOG.info "The job folder has been erased"
         return 2
